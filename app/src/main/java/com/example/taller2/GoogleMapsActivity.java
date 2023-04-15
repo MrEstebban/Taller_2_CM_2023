@@ -51,6 +51,8 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
     EditText mAddress;
     private static final String TAG = GoogleMapsActivity.class.getName();
     private Logger logger = Logger.getLogger(TAG);
+
+    public final static double RADIUS_OF_EARTH_KM = 6371;
     // Constantes de permisos
     private final int LOCATION_PERMISSION_ID = 103;
     String locationPerm = Manifest.permission.ACCESS_FINE_LOCATION;
@@ -137,6 +139,21 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
                     if (foundLocations != null && !foundLocations.isEmpty()) {
                         String firstLocationName = foundLocations.get(0).getAddressLine(0);
                         mMap.addMarker(new MarkerOptions().position(new LatLng(latLng.latitude, latLng.longitude)).title(firstLocationName));
+
+                        //Show toast measuring distance to current location
+                        if (ContextCompat.checkSelfPermission(GoogleMapsActivity.this, locationPerm) != PackageManager.PERMISSION_GRANTED) {
+                            logger.warning("Failed to getting the location permission :(");
+                        } else {
+                            logger.info("Success getting the location permission :)");
+                            mFusedLocationClient.getLastLocation().addOnSuccessListener(GoogleMapsActivity.this, currentLocation -> {
+                                logger.info("onSuccessLocation");
+                                if (currentLocation != null) {
+                                    Double distance = distance(latLng.latitude, latLng.longitude, currentLocation.getLatitude(), currentLocation.getLongitude());
+                                    Toast.makeText(GoogleMapsActivity.this, "Estás a " + distance.toString() + "km de este punto", Toast.LENGTH_LONG).show();
+                                }
+
+                            });
+                        }
                     }
                 } catch (IOException e) {
                     throw new RuntimeException(e);
@@ -200,7 +217,7 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
     }
 
     public void search(View view) {
-        mMap.clear();
+        //mMap.clear();
         findAddress();
     }
 
@@ -230,5 +247,19 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
         } else {
             Toast.makeText(GoogleMapsActivity.this, "La dirección está vacía", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private double distance (double lat1, double long1, double lat2, double long2) {
+        double latDistance = Math.toRadians(lat1 - lat2);
+        double lngDistance = Math.toRadians(long1 - long2);
+        double a = Math.sin(latDistance / 2)*
+                Math.sin(latDistance / 2)+
+                Math.cos(Math.toRadians(lat1))*
+                        Math.cos(Math.toRadians(lat2))*
+                        Math.sin(lngDistance / 2)*
+                        Math.sin(lngDistance / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        double result = RADIUS_OF_EARTH_KM * c;
+        return Math.round(result*100.0)/100.0;
     }
 }

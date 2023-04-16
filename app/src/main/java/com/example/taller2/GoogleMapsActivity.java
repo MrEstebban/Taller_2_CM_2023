@@ -8,19 +8,24 @@ import androidx.fragment.app.FragmentActivity;
 import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Address;
 import android.location.Geocoder;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.example.taller2.utils.DirectionsJSONParser;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdateFactory;
@@ -32,9 +37,21 @@ import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MapStyleOptions;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.example.taller2.databinding.ActivityGoogleMapsBinding;
+import com.google.android.gms.maps.model.PolylineOptions;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
 public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCallback {
@@ -140,7 +157,6 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
                         String firstLocationName = foundLocations.get(0).getAddressLine(0);
                         mMap.addMarker(new MarkerOptions().position(new LatLng(latLng.latitude, latLng.longitude)).title(firstLocationName));
 
-                        //Show toast measuring distance to current location
                         if (ContextCompat.checkSelfPermission(GoogleMapsActivity.this, locationPerm) != PackageManager.PERMISSION_GRANTED) {
                             logger.warning("Failed to getting the location permission :(");
                         } else {
@@ -149,6 +165,8 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
                                 logger.info("onSuccessLocation");
                                 if (currentLocation != null) {
                                     Double distance = distance(latLng.latitude, latLng.longitude, currentLocation.getLatitude(), currentLocation.getLongitude());
+
+                                    //Show toast measuring distance to current location
                                     Toast.makeText(GoogleMapsActivity.this, "Estás a " + distance.toString() + "km de este punto", Toast.LENGTH_LONG).show();
                                 }
 
@@ -190,7 +208,10 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
 
 
                     LatLng loc = new LatLng(location.getLatitude(), location.getLongitude());
-                    mMap.addMarker(new MarkerOptions().position(loc).title("Current location"));
+                    mMap.addMarker(new MarkerOptions()
+                            .position(loc)
+                            .title("Current location")
+                            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)));
                     mMap.moveCamera(CameraUpdateFactory.newLatLng(loc));
                     // Zoom
                     mMap.moveCamera(CameraUpdateFactory.zoomTo(15));
@@ -236,7 +257,77 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
                                 .title(addressResult.getFeatureName())
                                 .snippet(addressResult.getAddressLine(0))
                                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)));
-                        mMap.moveCamera(CameraUpdateFactory.newLatLng(position));
+                        //mMap.moveCamera(CameraUpdateFactory.newLatLng(position));
+
+                        if (ContextCompat.checkSelfPermission(GoogleMapsActivity.this, locationPerm) != PackageManager.PERMISSION_GRANTED) {
+                            logger.warning("Failed to getting the location permission :(");
+                        } else {
+                            logger.info("Success getting the location permission :)");
+                            mFusedLocationClient.getLastLocation().addOnSuccessListener(GoogleMapsActivity.this, currentLocation -> {
+                                logger.info("onSuccessLocation");
+                                if (currentLocation != null) {
+
+                                    //Draws the route from current location to found Geocoder direction
+                                    LatLng origin = new LatLng(currentLocation.getLatitude(), currentLocation.getLongitude());
+                                    LatLng dest = position;
+
+                                    // Getting URL to the Google Directions API
+                                    String url = getDirectionsUrl(origin, dest);
+
+                                    ExecutorService executor = Executors.newSingleThreadExecutor();
+                                    Handler handler = new Handler(Looper.getMainLooper());
+
+                                    executor.execute(() -> {
+                                        String data = "";
+                                        JSONObject jObject;
+                                        List<List<HashMap<String, String>>> routes = null;
+                                        try {
+                                            data = downloadUrl(url);
+                                            jObject = new JSONObject(data);
+                                            DirectionsJSONParser parser = new DirectionsJSONParser();
+                                            routes = parser.parse(jObject);
+                                        } catch (Exception e) {
+                                            Log.d("Background Task", e.toString());
+                                            e.printStackTrace();
+                                        }
+
+                                        List<List<HashMap<String, String>>> finalRoutes = routes;
+                                        handler.post(() -> {
+                                            //UI Thread work here
+                                            ArrayList points = null;
+                                            PolylineOptions lineOptions = null;
+                                            MarkerOptions markerOptions = new MarkerOptions();
+
+                                            for (int i = 0; i < finalRoutes.size(); i++) {
+                                                points = new ArrayList();
+                                                lineOptions = new PolylineOptions();
+
+                                                List<HashMap<String, String>> path = finalRoutes.get(i);
+
+                                                for (int j = 0; j < path.size(); j++) {
+                                                    HashMap<String, String> point = path.get(j);
+
+                                                    double lat = Double.parseDouble(point.get("lat"));
+                                                    double lng = Double.parseDouble(point.get("lng"));
+                                                    LatLng pos = new LatLng(lat, lng);
+
+                                                    points.add(pos);
+                                                }
+
+                                                lineOptions.addAll(points);
+                                                //lineOptions.width(12);
+                                                lineOptions.color(Color.RED);
+                                                lineOptions.geodesic(true);
+                                            }
+
+                                            // Drawing polyline in the Google Map for the i-th route
+                                            mMap.addPolyline(lineOptions);
+                                            mMap.moveCamera(CameraUpdateFactory.zoomTo(12));
+                                        });
+                                    });
+                                }
+                            });
+                        }
                     }
                 } else {
                     Toast.makeText(GoogleMapsActivity.this, "Dirección no encontrada", Toast.LENGTH_SHORT).show();
@@ -262,4 +353,67 @@ public class GoogleMapsActivity extends FragmentActivity implements OnMapReadyCa
         double result = RADIUS_OF_EARTH_KM * c;
         return Math.round(result*100.0)/100.0;
     }
+
+    private String getDirectionsUrl(LatLng origin, LatLng dest) {
+
+        // Origin of route
+        String str_origin = "origin=" + origin.latitude + "," + origin.longitude;
+
+        // Destination of route
+        String str_dest = "destination=" + dest.latitude + "," + dest.longitude;
+
+        // Sensor enabled
+        String sensor = "sensor=false";
+        String mode = "mode=driving";
+        String apiK = "key=" + BuildConfig.MAPS_API_KEY;
+
+        // Building the parameters to the web service
+        String parameters = str_origin + "&" + str_dest + "&" + sensor + "&" + mode + "&" + apiK;
+
+        // Output format
+        String output = "json";
+
+        // Building the url to the web service
+        String url = "https://maps.googleapis.com/maps/api/directions/" + output + "?" + parameters;
+
+
+        return url;
+    }
+
+    private String downloadUrl(String strUrl) throws IOException {
+        String data = "";
+        InputStream iStream = null;
+        HttpURLConnection urlConnection = null;
+        try {
+            URL url = new URL(strUrl);
+
+            urlConnection = (HttpURLConnection) url.openConnection();
+
+            urlConnection.connect();
+
+            iStream = urlConnection.getInputStream();
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(iStream));
+
+            StringBuffer sb = new StringBuffer();
+
+            String line = "";
+            while ((line = br.readLine()) != null) {
+                sb.append(line);
+            }
+
+            data = sb.toString();
+
+            br.close();
+
+        } catch (Exception e) {
+            Log.d("Exception", e.toString());
+        } finally {
+            iStream.close();
+            urlConnection.disconnect();
+        }
+        return data;
+    }
+
 }
+
